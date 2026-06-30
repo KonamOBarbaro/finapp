@@ -191,7 +191,84 @@ app.post('/api/transactions/process-split', authMiddleware, async (req: any, res
 });
 
 // =====================================
-// 3. PAINEL PRINCIPAL (DASHBOARD)
+// 3. GESTÃO DE FAMÍLIA (WORKSPACE)
+// =====================================
+
+app.get('/api/family', authMiddleware, async (req: any, res: any) => {
+  const workspaceId = req.user.workspaceId;
+  try {
+    const workspace = await prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      include: {
+        users: {
+          select: { id: true, name: true, email: true, income: true, createdAt: true }
+        }
+      }
+    });
+    if (!workspace) return res.status(404).json({ error: 'Workspace não encontrado' });
+    
+    const totalIncome = workspace.users.reduce((acc, u) => acc + (u.income || 0), 0);
+    const members = workspace.users.map(u => ({
+      ...u,
+      proportion: totalIncome > 0 ? ((u.income || 0) / totalIncome) * 100 : 0
+    }));
+
+    res.json({ workspaceId: workspace.id, name: workspace.name, totalIncome, members });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao buscar família' });
+  }
+});
+
+app.post('/api/family/add', authMiddleware, async (req: any, res: any) => {
+  const workspaceId = req.user.workspaceId;
+  const { name, email, password, income } = req.body;
+
+  try {
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser) return res.status(400).json({ error: 'Email já cadastrado.' });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newUser = await prisma.user.create({
+      data: {
+        name,
+        email,
+        password: hashedPassword,
+        income: income || 0,
+        workspaceId
+      }
+    });
+
+    res.status(201).json({ message: 'Membro adicionado com sucesso', user: { id: newUser.id, name: newUser.name } });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao adicionar membro' });
+  }
+});
+
+app.put('/api/family/income', authMiddleware, async (req: any, res: any) => {
+  const { userId, income } = req.body;
+  const workspaceId = req.user.workspaceId;
+
+  try {
+    // Check if user belongs to the same workspace
+    const userToUpdate = await prisma.user.findUnique({ where: { id: userId } });
+    if (!userToUpdate || userToUpdate.workspaceId !== workspaceId) {
+      return res.status(403).json({ error: 'Usuário não pertence a esta família' });
+    }
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: { income }
+    });
+
+    res.json({ message: 'Renda atualizada com sucesso' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao atualizar renda' });
+  }
+});
+
+// =====================================
+// 4. PAINEL PRINCIPAL (DASHBOARD)
 // =====================================
 
 app.get('/api/dashboard', authMiddleware, async (req: any, res: any) => {
