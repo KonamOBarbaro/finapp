@@ -359,6 +359,43 @@ app.get('/api/dashboard', authMiddleware, async (req: any, res: any) => {
 // 4. TRANSAÇÕES (CRUD MANUAL)
 // =====================================
 
+app.get('/api/transactions', authMiddleware, async (req: any, res: any) => {
+  const workspaceId = req.user.workspaceId;
+  const { page = '1', limit = '30', type, search } = req.query as any;
+  const skip = (parseInt(page) - 1) * parseInt(limit);
+
+  try {
+    const accounts = await prisma.bankAccount.findMany({
+      where: { bankConnection: { workspaceId } },
+      select: { id: true },
+    });
+    const accountIds = accounts.map((a: any) => a.id);
+
+    const where: any = { bankAccountId: { in: accountIds } };
+    if (type && type !== 'ALL') where.type = type;
+    if (search) where.description = { contains: search, mode: 'insensitive' };
+
+    const [transactions, total] = await Promise.all([
+      prisma.transaction.findMany({
+        where,
+        orderBy: { date: 'desc' },
+        skip,
+        take: parseInt(limit),
+        include: {
+          bankAccount: { include: { bankConnection: { select: { bankName: true } } } },
+          splits: { include: { user: { select: { name: true } } } },
+        },
+      }),
+      prisma.transaction.count({ where }),
+    ]);
+
+    res.json({ transactions, total, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
+  } catch (error) {
+    console.error('Erro ao buscar transações:', error);
+    res.status(500).json({ error: 'Erro ao buscar transações' });
+  }
+});
+
 app.post('/api/transactions', authMiddleware, async (req: any, res: any) => {
   const workspaceId = req.user.workspaceId;
   const { bankAccountId, amount, description, type, category, isShared, userId } = req.body;
