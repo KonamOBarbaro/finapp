@@ -137,13 +137,19 @@ async function syncTransactionsForItem(itemId: string, workspaceId: string) {
   const dateFrom = thirtyDaysAgo.toISOString().split('T')[0];
 
   const accounts = await pluggyClient.fetchAccounts(itemId);
+  console.log(`[Sync] ${accounts.results.length} conta(s) para itemId ${itemId}`);
   let txCount = 0;
 
   for (const account of accounts.results) {
     const bankAccount = await prisma.bankAccount.findUnique({ where: { accountId: account.id } });
-    if (!bankAccount) continue;
+    if (!bankAccount) {
+      console.warn(`[Sync] Conta ${account.id} não encontrada no banco, pulando.`);
+      continue;
+    }
 
     const transactions = await pluggyClient.fetchTransactions(account.id, { from: dateFrom });
+    console.log(`[Sync] Conta ${account.name}: ${transactions.results.length} transação(ões) da Pluggy`);
+
     for (const tx of transactions.results) {
       const amount = tx.type === 'DEBIT' ? -Math.abs(tx.amount) : Math.abs(tx.amount);
       const exists = await prisma.transaction.findFirst({
@@ -161,6 +167,7 @@ async function syncTransactionsForItem(itemId: string, workspaceId: string) {
       txCount++;
     }
   }
+  console.log(`[Sync] Total salvo: ${txCount} nova(s) transação(ões)`);
   return txCount;
 }
 
