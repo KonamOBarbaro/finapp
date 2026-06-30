@@ -147,10 +147,10 @@ async function syncTransactionsForItem(itemId: string, workspaceId: string) {
       continue;
     }
 
-    const transactions = await pluggyClient.fetchTransactions(account.id, { from: dateFrom });
-    console.log(`[Sync] Conta ${account.name}: ${transactions.results.length} transação(ões) da Pluggy`);
+    const transactions = await pluggyClient.fetchAllTransactions(account.id, { dateFrom });
+    console.log(`[Sync] Conta ${account.name}: ${transactions.length} transação(ões) da Pluggy`);
 
-    for (const tx of transactions.results) {
+    for (const tx of transactions) {
       const amount = tx.type === 'DEBIT' ? -Math.abs(tx.amount) : Math.abs(tx.amount);
       const exists = await prisma.transaction.findFirst({
         where: { bankAccountId: bankAccount.id, description: tx.description, amount, date: new Date(tx.date) },
