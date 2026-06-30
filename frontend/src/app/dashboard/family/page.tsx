@@ -18,7 +18,7 @@ export default function FamilyPage() {
 
   const fetchFamily = async () => {
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/family`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/family`, {
         headers: {
           Authorization: `Bearer ${localStorage.getItem("token")}`,
         },
@@ -41,7 +41,7 @@ export default function FamilyPage() {
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/family/add`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/family/add`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -73,7 +73,7 @@ export default function FamilyPage() {
 
   const handleUpdateIncome = async (userId: string) => {
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/family/income`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/family/income`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",

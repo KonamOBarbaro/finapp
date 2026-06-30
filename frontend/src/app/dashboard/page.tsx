@@ -15,6 +15,7 @@ export default function Dashboard() {
   const [pluggyToken, setPluggyToken] = useState<string | null>(null);
   const router = useRouter();
 
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'loading' | 'error'>('idle');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formDesc, setFormDesc] = useState('');
   const [formAmount, setFormAmount] = useState('');
@@ -26,17 +27,24 @@ export default function Dashboard() {
   const [formInstallments, setFormInstallments] = useState('2');
 
   const handleConnectPluggy = async () => {
+    setSyncStatus('loading');
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3333';
       const res = await fetch(`${apiUrl}/api/open-finance/token`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
+      if (!res.ok) throw new Error(`Backend retornou ${res.status}`);
       const json = await res.json();
       if (json.accessToken) {
         setPluggyToken(json.accessToken);
+        setSyncStatus('idle');
+      } else {
+        throw new Error('Token não retornado');
       }
     } catch (err) {
       console.error('Erro ao conectar com Pluggy:', err);
+      setSyncStatus('error');
+      setTimeout(() => setSyncStatus('idle'), 4000);
     }
   };
 
@@ -147,9 +155,31 @@ export default function Dashboard() {
             <svg className="w-5 h-5 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
             <span>Nova Transação</span>
           </button>
-          <button onClick={handleConnectPluggy} className="px-5 py-2.5 rounded-xl bg-primary text-white font-semibold shadow-lg shadow-primary/25 hover:bg-primary-light transition-all flex items-center space-x-2">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path></svg>
-            <span>Sincronizar Open Finance</span>
+          <button
+            onClick={handleConnectPluggy}
+            disabled={syncStatus === 'loading'}
+            className={`px-5 py-2.5 rounded-xl font-semibold shadow-lg transition-all flex items-center space-x-2 ${
+              syncStatus === 'error'
+                ? 'bg-red-600 text-white shadow-red-500/25'
+                : 'bg-primary text-white shadow-primary/25 hover:bg-primary-light disabled:opacity-60 disabled:cursor-not-allowed'
+            }`}
+          >
+            {syncStatus === 'loading' ? (
+              <>
+                <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                <span>Conectando...</span>
+              </>
+            ) : syncStatus === 'error' ? (
+              <>
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span>Backend offline — veja instruções</span>
+              </>
+            ) : (
+              <>
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+                <span>Sincronizar Open Finance</span>
+              </>
+            )}
           </button>
         </div>
       </div>
