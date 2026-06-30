@@ -582,8 +582,26 @@ app.post('/api/open-finance/connect', authMiddleware, async (req: any, res: any)
   try {
     // 1. Busca os detalhes do item na Pluggy para pegar o nome do banco e status
     const item = await pluggyClient.fetchItem(itemId);
+    const bankName = item.connector.name;
 
-    // 2. Cria ou atualiza o BankConnection usando o itemId como chave única
+    // 2. Remove conexões antigas com o mesmo banco para evitar duplicatas
+    const oldConnections = await prisma.bankConnection.findMany({
+      where: { workspaceId, bankName, NOT: { itemId } },
+      include: { accounts: { include: { transactions: { include: { splits: true } } } } },
+    });
+    for (const old of oldConnections) {
+      for (const acc of old.accounts) {
+        for (const tx of acc.transactions) {
+          await prisma.splitPayment.deleteMany({ where: { transactionId: tx.id } });
+        }
+        await prisma.transaction.deleteMany({ where: { bankAccountId: acc.id } });
+      }
+      await prisma.bankAccount.deleteMany({ where: { bankConnectionId: old.id } });
+      await prisma.bankConnection.delete({ where: { id: old.id } });
+    }
+    console.log(`[Connect] ${oldConnections.length} conexão(ões) duplicada(s) removida(s) para "${bankName}"`);
+
+    // 3. Cria ou atualiza o BankConnection usando o itemId como chave única
     const bankConnection = await prisma.bankConnection.upsert({
       where: { itemId },
       update: { status: item.status },
@@ -591,7 +609,7 @@ app.post('/api/open-finance/connect', authMiddleware, async (req: any, res: any)
         workspaceId,
         itemId,
         providerName: 'PLUGGY',
-        bankName: item.connector.name,
+        bankName,
         status: item.status,
       },
     });
