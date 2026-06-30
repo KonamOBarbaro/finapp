@@ -1,0 +1,115 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String     @id @default(uuid())
+  email       String     @unique
+  name        String?
+  password    String
+  income      Float      @default(0) // Used to calculate proportional split
+  workspaceId String?
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id])
+  splitsPaid  SplitPayment[] @relation("UserSplits")
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  individualExpenses Transaction[] @relation("UserIndividualExpenses")
+}
+
+model Workspace {
+  id              String           @id @default(uuid())
+  name            String
+  users           User[]
+  bankConnections BankConnection[]
+  splitRuleMode   String           @default("PROPORTIONAL") // "PROPORTIONAL", "EQUAL", "CUSTOM"
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+}
+
+model BankConnection {
+  id           String        @id @default(uuid())
+  workspaceId  String
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id])
+  providerName String        
+  itemId       String        
+  bankName     String        
+  status       String        
+  accounts     BankAccount[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model BankAccount {
+  id               String         @id @default(uuid())
+  bankConnectionId String
+  bankConnection   BankConnection @relation(fields: [bankConnectionId], references: [id])
+  accountId        String         
+  name             String
+  type             String         // "CHECKING", "CREDIT_CARD", etc
+  balance          Float
+  currency         String         @default("BRL")
+  
+  // Credit Card specific fields
+  creditLimit      Float?
+  availableLimit   Float?
+  dueDate          Int?           // Day of the month (1-31)
+  closingDate      Int?           // Day of the month (1-31)
+
+  transactions     Transaction[]
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+}
+
+model Transaction {
+  id            String      @id @default(uuid())
+  bankAccountId String
+  bankAccount   BankAccount @relation(fields: [bankAccountId], references: [id])
+  amount        Float
+  description   String
+  date          DateTime
+  category      String?
+  type          String      // "INFLOW", "OUTFLOW"
+  paymentMethod String      @default("CASH") // "CASH" (à vista), "INSTALLMENT" (parcelado)
+  
+  // Installments relation
+  installmentId String?
+  installment   Installment? @relation(fields: [installmentId], references: [id])
+  
+  // Individual expenses
+  isShared      Boolean     @default(true)
+  userId        String?
+  user          User?       @relation("UserIndividualExpenses", fields: [userId], references: [id])
+  
+  // Split logic
+  splits        SplitPayment[]
+
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}
+
+model Installment {
+  id              String        @id @default(uuid())
+  totalAmount     Float
+  totalInstallments Int
+  description     String
+  transactions    Transaction[]
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+}
+
+model SplitPayment {
+  id            String      @id @default(uuid())
+  transactionId String
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
+  userId        String      // The user responsible for this portion
+  user          User        @relation("UserSplits", fields: [userId], references: [id])
+  amountOwed    Float
+  status        String      @default("PENDING") // "PENDING", "PAID"
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}

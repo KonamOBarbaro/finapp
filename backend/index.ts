@@ -1,0 +1,484 @@
+import express from 'express';
+import cors from 'cors';
+import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import 'dotenv/config';
+import { PluggyClient } from 'pluggy-sdk';
+
+const app = express();
+const prisma = new PrismaClient();
+const JWT_SECRET = process.env.JWT_SECRET || 'aj-solutions-secret-key-2026';
+const PLUGGY_CLIENT_ID = process.env.PLUGGY_CLIENT_ID || '';
+const PLUGGY_CLIENT_SECRET = process.env.PLUGGY_CLIENT_SECRET || '';
+
+let pluggyClient: PluggyClient | null = null;
+if (PLUGGY_CLIENT_ID && PLUGGY_CLIENT_SECRET) {
+  pluggyClient = new PluggyClient({
+    clientId: PLUGGY_CLIENT_ID,
+    clientSecret: PLUGGY_CLIENT_SECRET,
+  });
+}
+
+app.use(cors());
+app.use(express.json());
+
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', message: 'FinApp Backend is running with SaaS Split Engine & Auth!' });
+});
+
+// =====================================
+// 1. AUTHENTICATION (Login & Register)
+// =====================================
+
+app.post('/api/auth/register', async (req, res) => {
+  const { email, password, name, income } = req.body;
+
+  try {
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser) return res.status(400).json({ error: 'Email já cadastrado.' });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    // Cria o usuário e, no mesmo momento, cria um Workspace (Família) padrão para ele
+    const user = await prisma.user.create({
+      data: {
+        email,
+        name,
+        password: hashedPassword,
+        income: income || 0,
+        workspace: {
+          create: {
+            name: `Família de ${name}`
+          }
+        }
+      }
+    });
+
+    res.status(201).json({ message: 'Usuário e Workspace criados com sucesso!' });
+  } catch (error) {
+    console.error('Registration Error:', error);
+    res.status(500).json({ error: 'Erro ao registrar usuário' });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) return res.status(404).json({ error: 'Usuário não encontrado' });
+
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) return res.status(401).json({ error: 'Senha incorreta' });
+
+    const token = jwt.sign(
+      { userId: user.id, workspaceId: user.workspaceId },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({ token, user: { id: user.id, email: user.email, name: user.name, workspaceId: user.workspaceId } });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao realizar login' });
+  }
+});
+
+// Middleware para proteger rotas com JWT
+const authMiddleware = (req: any, res: any, next: any) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: 'Token não fornecido' });
+
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded; // Adiciona os dados do token (userId, workspaceId) no request
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Token inválido' });
+  }
+};
+
+// =====================================
+// 2. MOTORES FINANCEIROS (Protegidos)
+// =====================================
+
+// Engine de Rateio Inteligente (Split Payment)
+async function processSplitForTransaction(transactionId: string, workspaceId: string, amount: number) {
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    include: { users: true }
+  });
+
+  if (!workspace) throw new Error('Workspace não encontrado');
+
+  const totalIncome = workspace.users.reduce((acc, user) => acc + (user.income || 0), 0);
+  if (totalIncome <= 0) return []; // Se não tem renda, não faz rateio proporcional
+
+  return await Promise.all(
+    workspace.users.map(async (user) => {
+      const userProportion = (user.income || 0) / totalIncome;
+      return prisma.splitPayment.create({
+        data: {
+          transactionId,
+          userId: user.id,
+          amountOwed: Math.abs(amount) * userProportion,
+          status: 'PENDING'
+        }
+      });
+    })
+  );
+}
+
+// Esta rota simula o recebimento de uma transação via webhook (Open Finance) e calcula a divisão
+app.post('/api/transactions/process-split', authMiddleware, async (req: any, res: any) => {
+  const { transactionId } = req.body;
+  const workspaceId = req.user.workspaceId; // Pega o workspaceId do Token logado!
+
+  try {
+    // 1. Busca o Workspace e os usuários para saber a renda (income) de cada um
+    const workspace = await prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      include: { users: true }
+    });
+
+    if (!workspace) return res.status(404).json({ error: 'Workspace não encontrado' });
+
+    // 2. Busca a transação original
+    const transaction = await prisma.transaction.findUnique({
+      where: { id: transactionId }
+    });
+
+    if (!transaction) return res.status(404).json({ error: 'Transação não encontrada' });
+
+    // 3. Calcula a renda total da família para achar a proporção
+    const totalIncome = workspace.users.reduce((acc, user) => acc + (user.income || 0), 0);
+
+    if (totalIncome === 0) {
+      return res.status(400).json({ error: 'Os usuários precisam ter renda configurada para o rateio proporcional.' });
+    }
+
+    // 4. Cria os SplitPayments (Rateios) baseados na proporção da renda
+    const splits = await Promise.all(
+      workspace.users.map(async (user) => {
+        const userProportion = (user.income || 0) / totalIncome;
+        const amountOwed = transaction.amount * userProportion;
+
+        return prisma.splitPayment.create({
+          data: {
+            transactionId: transaction.id,
+            userId: user.id,
+            amountOwed: amountOwed,
+            status: 'PENDING'
+          }
+        });
+      })
+    );
+
+    res.json({
+      message: 'Rateio gerado com sucesso!',
+      transaction: transaction.amount,
+      splitRules: workspace.users.map(u => ({
+        user: u.email,
+        percentage: ((u.income / totalIncome) * 100).toFixed(2) + '%'
+      })),
+      splits
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao processar o rateio' });
+  }
+});
+
+// =====================================
+// 3. PAINEL PRINCIPAL (DASHBOARD)
+// =====================================
+
+app.get('/api/dashboard', authMiddleware, async (req: any, res: any) => {
+  const workspaceId = req.user.workspaceId;
+
+  try {
+    const workspace = await prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      include: { 
+        users: true,
+        bankConnections: {
+          include: {
+            accounts: {
+              include: {
+                transactions: {
+                  include: { splits: { include: { user: true } } }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!workspace) return res.status(404).json({ error: 'Workspace não encontrado' });
+
+    let totalBalance = 0;
+    let totalExpenses = 0;
+    const accounts: any[] = [];
+    const sharedTransactions: any[] = [];
+
+    workspace.bankConnections.forEach(connection => {
+      connection.accounts.forEach(account => {
+        totalBalance += account.balance;
+        accounts.push({
+          id: account.id,
+          name: account.name,
+          bank: connection.bankName,
+          balance: account.balance,
+          isCredit: account.type === 'CREDIT_CARD',
+          limit: account.creditLimit
+        });
+
+        account.transactions.forEach(tx => {
+          if (tx.type === 'OUTFLOW') {
+            totalExpenses += Math.abs(tx.amount);
+            if (tx.isShared) {
+              sharedTransactions.push({
+                id: tx.id,
+                description: tx.description,
+                amount: Math.abs(tx.amount),
+                shares: tx.splits.map(split => ({
+                  name: split.user.name,
+                  amount: split.amountOwed
+                }))
+              });
+            }
+          }
+        });
+      });
+    });
+
+    const totalIncome = workspace.users.reduce((sum, user) => sum + (user.income || 0), 0);
+
+    res.json({
+      workspaceName: workspace.name,
+      users: workspace.users.map(u => ({ 
+        name: u.name, 
+        income: u.income, 
+        percentage: totalIncome > 0 ? (u.income / totalIncome) * 100 : 0 
+      })),
+      finances: {
+        totalBalance: totalBalance,
+        totalIncome: totalIncome,
+        totalExpenses: totalExpenses,
+        leftover: totalIncome - totalExpenses
+      },
+      accounts: accounts.length > 0 ? accounts : [],
+      splits: sharedTransactions.length > 0 ? sharedTransactions : []
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erro ao carregar dados do dashboard' });
+  }
+});
+
+// =====================================
+// 4. TRANSAÇÕES (CRUD MANUAL)
+// =====================================
+
+app.post('/api/transactions', authMiddleware, async (req: any, res: any) => {
+  const workspaceId = req.user.workspaceId;
+  const { bankAccountId, amount, description, type, category, isShared, userId } = req.body;
+
+  try {
+    // Basic validation
+    if (!bankAccountId || !amount || !description || !type) {
+      return res.status(400).json({ error: 'Campos obrigatórios faltando.' });
+    }
+    
+    const shared = isShared !== undefined ? isShared : true;
+    if (!shared && !userId) {
+      return res.status(400).json({ error: 'Uma despesa individual requer o ID do usuário (userId).' });
+    }
+
+    // Verifica se a conta bancária existe e pertence ao workspace (simplificado)
+    // Create transaction
+    const transaction = await prisma.transaction.create({
+      data: {
+        bankAccountId,
+        amount: type === 'OUTFLOW' ? -Math.abs(amount) : Math.abs(amount),
+        description,
+        type,
+        category: category || 'Outros',
+        date: new Date(),
+        isShared: shared,
+        userId: shared ? null : userId
+      }
+    });
+
+    // Se for uma despesa (OUTFLOW) e compartilhada, engatilha o Rateio Inteligente!
+    if (type === 'OUTFLOW' && shared) {
+      await processSplitForTransaction(transaction.id, workspaceId, transaction.amount);
+    }
+
+    res.status(201).json({ message: 'Transação criada com sucesso!', transaction });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao criar transação' });
+  }
+});
+
+// Engine de Parcelamentos (Installments)
+// Esta rota simula a criação de uma compra parcelada, gerando as transações futuras
+app.post('/api/transactions/installments', authMiddleware, async (req: any, res: any) => {
+  const workspaceId = req.user.workspaceId;
+  const { bankAccountId, description, totalAmount, totalInstallments, startDate, isShared, userId } = req.body;
+
+  try {
+    const shared = isShared !== undefined ? isShared : true;
+    if (!shared && !userId) {
+      return res.status(400).json({ error: 'Uma despesa individual requer o ID do usuário (userId).' });
+    }
+
+    // 1. Cria o registro mestre de Parcelamento
+    const installment = await prisma.installment.create({
+      data: {
+        totalAmount,
+        totalInstallments,
+        description,
+      }
+    });
+
+    const installmentAmount = totalAmount / totalInstallments;
+    const start = new Date(startDate || new Date());
+    const transactionsToCreate = [];
+
+    // 2. Gera as X parcelas (Transações) para os próximos meses
+    for (let i = 0; i < totalInstallments; i++) {
+      const date = new Date(start);
+      date.setMonth(date.getMonth() + i);
+
+      transactionsToCreate.push({
+        bankAccountId,
+        installmentId: installment.id,
+        amount: -Math.abs(installmentAmount),
+        description: `${description} (${i + 1}/${totalInstallments})`,
+        date: date,
+        type: 'OUTFLOW',
+        isShared: shared,
+        userId: shared ? null : userId
+      });
+    }
+
+    // 3. Salva todas as transações futuras no banco
+    const createdTransactions = await prisma.$transaction(
+      transactionsToCreate.map(data => prisma.transaction.create({ data }))
+    );
+
+    // 4. Se for compartilhada, processa o rateio para cada transação futura gerada
+    if (shared) {
+      for (const tx of createdTransactions) {
+        await processSplitForTransaction(tx.id, workspaceId, tx.amount);
+      }
+    }
+
+    res.json({
+      message: 'Parcelamento gerado com sucesso!',
+      installment,
+      transactionsCreated: createdTransactions.length
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao processar parcelamento' });
+  }
+});
+
+// Basic route to list workspaces
+app.get('/api/workspaces', async (req, res) => {
+  try {
+    const workspaces = await prisma.workspace.findMany();
+    res.json(workspaces);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch workspaces' });
+  }
+});
+
+// =====================================
+// 5. OPEN FINANCE (PLUGGY)
+// =====================================
+
+// Rota para o frontend gerar o token do Widget da Pluggy
+app.get('/api/open-finance/token', authMiddleware, async (req: any, res: any) => {
+  if (!pluggyClient) {
+    return res.status(500).json({ error: 'Credenciais da Pluggy não configuradas no Backend.' });
+  }
+
+  try {
+    // Generate a Connect Token for the authenticated user's workspace
+    const connectToken = await pluggyClient.createConnectToken();
+    res.json({ accessToken: connectToken.accessToken });
+  } catch (error) {
+    console.error('Pluggy Token Error:', error);
+    res.status(500).json({ error: 'Falha ao conectar com o provedor Open Finance' });
+  }
+});
+
+// Webhook para receber novas transações do banco
+app.post('/api/open-finance/webhook', async (req, res) => {
+  const { event, itemId } = req.body;
+  
+  if (event === 'item/updated') {
+    console.log(`[Open Finance] Sincronização concluída para o item ${itemId}. Buscando transações...`);
+    
+    if (!pluggyClient) {
+      console.error('Pluggy Client não configurado.');
+      return res.status(500).send('Erro interno');
+    }
+
+    try {
+      // 1. Pega todas as contas atreladas a esta conexão bancária (item)
+      const accounts = await pluggyClient.fetchAccounts(itemId);
+      
+      for (const account of accounts.results) {
+        console.log(`Buscando transações para a conta: ${account.name}`);
+        
+        // 2. Pega as transações da conta
+        const transactions = await pluggyClient.fetchTransactions(account.id);
+        
+        // Aqui nós inseriríamos na base de dados.
+        // Como o webhook não nos dá o workspaceId diretamente (precisaríamos ter salvo o itemId no BD atrelado ao usuário),
+        // vou simular o fluxo pegando o primeiro Workspace do banco (O workspace principal do usuário no nosso MVP).
+        const workspace = await prisma.workspace.findFirst({
+          include: { users: true }
+        });
+
+        if (workspace) {
+          const totalIncome = workspace.users.reduce((acc: number, user: any) => acc + (user.income || 0), 0);
+          
+          for (const tx of transactions.results) {
+            // Se for uma despesa (valor negativo na Pluggy)
+            if (tx.amount < 0) {
+              const isShared = true; // No futuro, podemos ter regras de IA para definir isso automaticamente
+              console.log(`💸 Nova Despesa Open Finance detectada: ${tx.description} (R$ ${Math.abs(tx.amount)})`);
+              
+              if (isShared) {
+                console.log(`   -> Despesa Compartilhada! Engatilhando Motor de Rateio!`);
+                workspace.users.forEach((user: any) => {
+                  const proportion = (user.income || 0) / totalIncome;
+                  const owed = Math.abs(tx.amount) * proportion;
+                  console.log(`      Rateio gerado para ${user.name}: R$ ${owed.toFixed(2)} (${(proportion * 100).toFixed(1)}%)`);
+                });
+              } else {
+                console.log(`   -> Despesa Individual! Atribuindo diretamente ao usuário dono do cartão/conta.`);
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Erro ao processar webhook da Pluggy:', error);
+    }
+  }
+
+  res.status(200).send('OK');
+});
+
+const PORT = process.env.PORT || 3333;
+app.listen(PORT, () => {
+  console.log(`Server is running on http://localhost:${PORT}`);
+});
