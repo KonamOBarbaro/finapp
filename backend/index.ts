@@ -411,6 +411,7 @@ app.get('/api/transactions', authMiddleware, async (req: any, res: any) => {
       select: { id: true },
     });
     const accountIds = accounts.map((a: any) => a.id);
+    console.log(`[Transactions] workspaceId: ${workspaceId}, contas: ${accountIds.length}`);
 
     const where: any = { bankAccountId: { in: accountIds } };
     if (type && type !== 'ALL') where.type = type;
@@ -575,6 +576,7 @@ app.get('/api/open-finance/token', authMiddleware, async (req: any, res: any) =>
 app.post('/api/open-finance/connect', authMiddleware, async (req: any, res: any) => {
   const { itemId } = req.body;
   const workspaceId = req.user.workspaceId;
+  console.log(`[Connect] Recebido — itemId: ${itemId}, workspaceId: ${workspaceId}`);
 
   if (!pluggyClient) return res.status(500).json({ error: 'Pluggy não configurado.' });
   if (!itemId) return res.status(400).json({ error: 'itemId é obrigatório.' });
