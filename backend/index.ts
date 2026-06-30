@@ -479,14 +479,12 @@ app.get('/api/workspaces', async (req, res) => {
 // 5. OPEN FINANCE (PLUGGY)
 // =====================================
 
-// Rota para o frontend gerar o token do Widget da Pluggy
+// Gera o token do Widget da Pluggy para o frontend
 app.get('/api/open-finance/token', authMiddleware, async (req: any, res: any) => {
   if (!pluggyClient) {
     return res.status(500).json({ error: 'Credenciais da Pluggy não configuradas no Backend.' });
   }
-
   try {
-    // Generate a Connect Token for the authenticated user's workspace
     const connectToken = await pluggyClient.createConnectToken();
     res.json({ accessToken: connectToken.accessToken });
   } catch (error) {
@@ -495,64 +493,165 @@ app.get('/api/open-finance/token', authMiddleware, async (req: any, res: any) =>
   }
 });
 
-// Webhook para receber novas transações do banco
+// Chamado pelo frontend após o usuário conectar um banco pelo widget (onSuccess)
+app.post('/api/open-finance/connect', authMiddleware, async (req: any, res: any) => {
+  const { itemId } = req.body;
+  const workspaceId = req.user.workspaceId;
+
+  if (!pluggyClient) return res.status(500).json({ error: 'Pluggy não configurado.' });
+  if (!itemId) return res.status(400).json({ error: 'itemId é obrigatório.' });
+
+  try {
+    // 1. Busca os detalhes do item na Pluggy para pegar o nome do banco e status
+    const item = await pluggyClient.fetchItem(itemId);
+
+    // 2. Cria ou atualiza o BankConnection usando o itemId como chave única
+    const bankConnection = await prisma.bankConnection.upsert({
+      where: { itemId },
+      update: { status: item.status },
+      create: {
+        workspaceId,
+        itemId,
+        providerName: 'PLUGGY',
+        bankName: item.connector.name,
+        status: item.status,
+      },
+    });
+
+    // 3. Busca as contas do item e salva/atualiza cada uma
+    const accounts = await pluggyClient.fetchAccounts(itemId);
+    let accountsCount = 0;
+
+    for (const account of accounts.results) {
+      const accountType = account.subtype === 'CREDIT_CARD' ? 'CREDIT_CARD'
+        : account.subtype === 'SAVINGS_ACCOUNT' ? 'SAVINGS'
+        : 'CHECKING';
+
+      await prisma.bankAccount.upsert({
+        where: { accountId: account.id },
+        update: {
+          balance: account.balance,
+          creditLimit: account.creditData?.creditLimit ?? null,
+          availableLimit: account.creditData?.availableCreditLimit ?? null,
+        },
+        create: {
+          bankConnectionId: bankConnection.id,
+          accountId: account.id,
+          name: account.name || account.marketingName || 'Conta',
+          type: accountType,
+          balance: account.balance,
+          currency: account.currencyCode,
+          creditLimit: account.creditData?.creditLimit ?? null,
+          availableLimit: account.creditData?.availableCreditLimit ?? null,
+          dueDate: account.creditData?.balanceDueDate
+            ? new Date(account.creditData.balanceDueDate).getDate() : null,
+          closingDate: account.creditData?.balanceCloseDate
+            ? new Date(account.creditData.balanceCloseDate).getDate() : null,
+        },
+      });
+      accountsCount++;
+    }
+
+    res.json({
+      message: `Banco "${bankConnection.bankName}" conectado! ${accountsCount} conta(s) salva(s).`,
+      connection: { id: bankConnection.id, bankName: bankConnection.bankName, status: bankConnection.status, accountsCount },
+    });
+  } catch (error) {
+    console.error('Erro ao salvar conexão bancária:', error);
+    res.status(500).json({ error: 'Erro ao salvar conexão bancária' });
+  }
+});
+
+// Webhook: Pluggy avisa quando uma sincronização termina — persiste transações e aciona o rateio
 app.post('/api/open-finance/webhook', async (req, res) => {
   const { event, itemId } = req.body;
-  
-  if (event === 'item/updated') {
-    console.log(`[Open Finance] Sincronização concluída para o item ${itemId}. Buscando transações...`);
-    
-    if (!pluggyClient) {
-      console.error('Pluggy Client não configurado.');
-      return res.status(500).send('Erro interno');
+  res.status(200).send('OK'); // responde imediatamente para Pluggy não retentar
+
+  if (event !== 'item/updated' || !pluggyClient) return;
+
+  console.log(`[Webhook] item/updated recebido para itemId: ${itemId}`);
+
+  try {
+    // 1. Localiza a conexão pelo itemId para saber o workspaceId
+    const bankConnection = await prisma.bankConnection.findUnique({
+      where: { itemId },
+      include: { workspace: { include: { users: true } } },
+    });
+
+    if (!bankConnection) {
+      console.warn(`[Webhook] itemId ${itemId} não encontrado no banco. Ignorado.`);
+      return;
     }
 
-    try {
-      // 1. Pega todas as contas atreladas a esta conexão bancária (item)
-      const accounts = await pluggyClient.fetchAccounts(itemId);
-      
-      for (const account of accounts.results) {
-        console.log(`Buscando transações para a conta: ${account.name}`);
-        
-        // 2. Pega as transações da conta
-        const transactions = await pluggyClient.fetchTransactions(account.id);
-        
-        // Aqui nós inseriríamos na base de dados.
-        // Como o webhook não nos dá o workspaceId diretamente (precisaríamos ter salvo o itemId no BD atrelado ao usuário),
-        // vou simular o fluxo pegando o primeiro Workspace do banco (O workspace principal do usuário no nosso MVP).
-        const workspace = await prisma.workspace.findFirst({
-          include: { users: true }
+    // 2. Sincroniza contas e transações dos últimos 30 dias
+    const accounts = await pluggyClient.fetchAccounts(itemId);
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const dateFrom = thirtyDaysAgo.toISOString().split('T')[0];
+
+    for (const account of accounts.results) {
+      // Atualiza saldo da conta no banco
+      const bankAccount = await prisma.bankAccount.upsert({
+        where: { accountId: account.id },
+        update: { balance: account.balance },
+        create: {
+          bankConnectionId: bankConnection.id,
+          accountId: account.id,
+          name: account.name || 'Conta',
+          type: account.subtype === 'CREDIT_CARD' ? 'CREDIT_CARD' : 'CHECKING',
+          balance: account.balance,
+          currency: account.currencyCode,
+        },
+      });
+
+      // Busca transações recentes
+      const transactions = await pluggyClient.fetchTransactions(account.id, { from: dateFrom });
+
+      for (const tx of transactions.results) {
+        // Evita duplicatas usando description + amount + date como chave
+        const exists = await prisma.transaction.findFirst({
+          where: {
+            bankAccountId: bankAccount.id,
+            description: tx.description,
+            amount: tx.type === 'DEBIT' ? -Math.abs(tx.amount) : Math.abs(tx.amount),
+            date: new Date(tx.date),
+          },
+        });
+        if (exists) continue;
+
+        const type = tx.type === 'DEBIT' ? 'OUTFLOW' : 'INFLOW';
+        const amount = tx.type === 'DEBIT' ? -Math.abs(tx.amount) : Math.abs(tx.amount);
+
+        const saved = await prisma.transaction.create({
+          data: {
+            bankAccountId: bankAccount.id,
+            amount,
+            description: tx.description,
+            date: new Date(tx.date),
+            category: tx.category || 'Outros',
+            type,
+            isShared: true,
+          },
         });
 
-        if (workspace) {
-          const totalIncome = workspace.users.reduce((acc: number, user: any) => acc + (user.income || 0), 0);
-          
-          for (const tx of transactions.results) {
-            // Se for uma despesa (valor negativo na Pluggy)
-            if (tx.amount < 0) {
-              const isShared = true; // No futuro, podemos ter regras de IA para definir isso automaticamente
-              console.log(`💸 Nova Despesa Open Finance detectada: ${tx.description} (R$ ${Math.abs(tx.amount)})`);
-              
-              if (isShared) {
-                console.log(`   -> Despesa Compartilhada! Engatilhando Motor de Rateio!`);
-                workspace.users.forEach((user: any) => {
-                  const proportion = (user.income || 0) / totalIncome;
-                  const owed = Math.abs(tx.amount) * proportion;
-                  console.log(`      Rateio gerado para ${user.name}: R$ ${owed.toFixed(2)} (${(proportion * 100).toFixed(1)}%)`);
-                });
-              } else {
-                console.log(`   -> Despesa Individual! Atribuindo diretamente ao usuário dono do cartão/conta.`);
-              }
-            }
-          }
+        // Aciona o motor de rateio proporcional para despesas compartilhadas
+        if (type === 'OUTFLOW') {
+          await processSplitForTransaction(saved.id, bankConnection.workspaceId, saved.amount);
+          console.log(`[Rateio] ${tx.description} — R$ ${Math.abs(tx.amount)} dividido entre ${bankConnection.workspace.users.length} membro(s)`);
         }
       }
-    } catch (error) {
-      console.error('Erro ao processar webhook da Pluggy:', error);
     }
-  }
 
-  res.status(200).send('OK');
+    // 3. Marca a conexão como atualizada
+    await prisma.bankConnection.update({
+      where: { id: bankConnection.id },
+      data: { status: 'UPDATED' },
+    });
+
+    console.log(`[Webhook] Sincronização concluída para "${bankConnection.bankName}"`);
+  } catch (error) {
+    console.error('[Webhook] Erro ao processar:', error);
+  }
 });
 
 const PORT = process.env.PORT || 3333;

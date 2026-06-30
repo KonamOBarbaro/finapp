@@ -384,13 +384,30 @@ export default function Dashboard() {
       <PluggyConnect
         connectToken={pluggyToken}
         includeSandbox={true}
-        onSuccess={(itemData: any) => {
-          console.log('Conexão realizada!', itemData);
-          setPluggyToken(null);
-          // Atualizaria a tela aqui chamando a API do dashboard novamente
+        onSuccess={async (itemData: { item: { id: string } }) => {
+          try {
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3333';
+            await fetch(`${apiUrl}/api/open-finance/connect`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('token')}`,
+              },
+              body: JSON.stringify({ itemId: itemData.item.id }),
+            });
+            // Atualiza o dashboard com os novos dados do banco
+            const res = await fetch(`${apiUrl}/api/dashboard`, {
+              headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+            });
+            if (res.ok) setData(await res.json());
+          } catch (err) {
+            console.error('Erro ao salvar conexão bancária:', err);
+          } finally {
+            setPluggyToken(null);
+          }
         }}
         onError={(error: any) => {
-          console.error('Erro no widget da pluggy', error);
+          console.error('Erro no widget da Pluggy:', error);
           setPluggyToken(null);
         }}
         onClose={() => setPluggyToken(null)}
