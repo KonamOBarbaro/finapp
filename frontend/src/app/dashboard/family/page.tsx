@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Users, Plus, Target, Building, Wallet, Trash } from "lucide-react";
 
 export default function FamilyPage() {
   const [family, setFamily] = useState<any>(null);
@@ -115,7 +114,7 @@ export default function FamilyPage() {
             onClick={() => setShowAddForm(true)}
             className="flex items-center justify-center gap-2 px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-500 text-white rounded-lg font-medium hover:from-cyan-400 hover:to-blue-400 transition-all shadow-lg shadow-cyan-500/20"
           >
-            <Plus className="w-5 h-5" />
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
             Adicionar Membro
           </button>
         )}
@@ -194,7 +193,7 @@ export default function FamilyPage() {
       <div className="bg-gradient-to-br from-emerald-500/10 to-teal-500/10 border border-emerald-500/20 rounded-2xl p-6">
         <div className="flex items-center gap-4">
           <div className="p-3 bg-emerald-500/20 rounded-xl">
-            <Building className="w-6 h-6 text-emerald-400" />
+            <svg className="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
           </div>
           <div>
             <p className="text-sm font-medium text-emerald-400/80">Renda Total da Família</p>
@@ -230,7 +229,7 @@ export default function FamilyPage() {
             <div className="space-y-4">
               <div className="flex items-center justify-between p-3 bg-slate-900/50 rounded-xl border border-slate-800">
                 <div className="flex items-center gap-2">
-                  <Wallet className="w-4 h-4 text-slate-400" />
+                  <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path></svg>
                   <span className="text-sm text-slate-300">Renda Declarada</span>
                 </div>
                 {editIncomeUser === member.id ? (
