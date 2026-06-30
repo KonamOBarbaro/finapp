@@ -130,6 +130,40 @@ async function processSplitForTransaction(transactionId: string, workspaceId: st
   );
 }
 
+async function syncTransactionsForItem(itemId: string, workspaceId: string) {
+  if (!pluggyClient) return 0;
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  const dateFrom = thirtyDaysAgo.toISOString().split('T')[0];
+
+  const accounts = await pluggyClient.fetchAccounts(itemId);
+  let txCount = 0;
+
+  for (const account of accounts.results) {
+    const bankAccount = await prisma.bankAccount.findUnique({ where: { accountId: account.id } });
+    if (!bankAccount) continue;
+
+    const transactions = await pluggyClient.fetchTransactions(account.id, { from: dateFrom });
+    for (const tx of transactions.results) {
+      const amount = tx.type === 'DEBIT' ? -Math.abs(tx.amount) : Math.abs(tx.amount);
+      const exists = await prisma.transaction.findFirst({
+        where: { bankAccountId: bankAccount.id, description: tx.description, amount, date: new Date(tx.date) },
+      });
+      if (exists) continue;
+
+      const type = tx.type === 'DEBIT' ? 'OUTFLOW' : 'INFLOW';
+      const saved = await prisma.transaction.create({
+        data: { bankAccountId: bankAccount.id, amount, description: tx.description, date: new Date(tx.date), category: tx.category || null, type, isShared: true },
+      });
+      if (type === 'OUTFLOW') {
+        await processSplitForTransaction(saved.id, workspaceId, saved.amount);
+      }
+      txCount++;
+    }
+  }
+  return txCount;
+}
+
 // Esta rota simula o recebimento de uma transação via webhook (Open Finance) e calcula a divisão
 app.post('/api/transactions/process-split', authMiddleware, async (req: any, res: any) => {
   const { transactionId } = req.body;
@@ -589,9 +623,11 @@ app.post('/api/open-finance/connect', authMiddleware, async (req: any, res: any)
       accountsCount++;
     }
 
+    const txCount = await syncTransactionsForItem(itemId, workspaceId);
+
     res.json({
-      message: `Banco "${bankConnection.bankName}" conectado! ${accountsCount} conta(s) salva(s).`,
-      connection: { id: bankConnection.id, bankName: bankConnection.bankName, status: bankConnection.status, accountsCount },
+      message: `Banco "${bankConnection.bankName}" conectado! ${accountsCount} conta(s) e ${txCount} transação(ões) salva(s).`,
+      connection: { id: bankConnection.id, bankName: bankConnection.bankName, status: bankConnection.status, accountsCount, txCount },
     });
   } catch (error) {
     console.error('Erro ao salvar conexão bancária:', error);
@@ -620,72 +656,25 @@ app.post('/api/open-finance/webhook', async (req, res) => {
       return;
     }
 
-    // 2. Sincroniza contas e transações dos últimos 30 dias
+    // 2. Atualiza saldos das contas
     const accounts = await pluggyClient.fetchAccounts(itemId);
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const dateFrom = thirtyDaysAgo.toISOString().split('T')[0];
-
     for (const account of accounts.results) {
-      // Atualiza saldo da conta no banco
-      const bankAccount = await prisma.bankAccount.upsert({
+      await prisma.bankAccount.updateMany({
         where: { accountId: account.id },
-        update: { balance: account.balance },
-        create: {
-          bankConnectionId: bankConnection.id,
-          accountId: account.id,
-          name: account.name || 'Conta',
-          type: account.subtype === 'CREDIT_CARD' ? 'CREDIT_CARD' : 'CHECKING',
-          balance: account.balance,
-          currency: account.currencyCode,
-        },
+        data: { balance: account.balance },
       });
-
-      // Busca transações recentes
-      const transactions = await pluggyClient.fetchTransactions(account.id, { from: dateFrom });
-
-      for (const tx of transactions.results) {
-        // Evita duplicatas usando description + amount + date como chave
-        const exists = await prisma.transaction.findFirst({
-          where: {
-            bankAccountId: bankAccount.id,
-            description: tx.description,
-            amount: tx.type === 'DEBIT' ? -Math.abs(tx.amount) : Math.abs(tx.amount),
-            date: new Date(tx.date),
-          },
-        });
-        if (exists) continue;
-
-        const type = tx.type === 'DEBIT' ? 'OUTFLOW' : 'INFLOW';
-        const amount = tx.type === 'DEBIT' ? -Math.abs(tx.amount) : Math.abs(tx.amount);
-
-        const saved = await prisma.transaction.create({
-          data: {
-            bankAccountId: bankAccount.id,
-            amount,
-            description: tx.description,
-            date: new Date(tx.date),
-            category: tx.category || 'Outros',
-            type,
-            isShared: true,
-          },
-        });
-
-        // Aciona o motor de rateio proporcional para despesas compartilhadas
-        if (type === 'OUTFLOW') {
-          await processSplitForTransaction(saved.id, bankConnection.workspaceId, saved.amount);
-          console.log(`[Rateio] ${tx.description} — R$ ${Math.abs(tx.amount)} dividido entre ${bankConnection.workspace.users.length} membro(s)`);
-        }
-      }
     }
 
-    // 3. Marca a conexão como atualizada
+    // 3. Sincroniza transações usando a função compartilhada
+    const txCount = await syncTransactionsForItem(itemId, bankConnection.workspaceId);
+
+    // 4. Marca a conexão como atualizada
     await prisma.bankConnection.update({
       where: { id: bankConnection.id },
       data: { status: 'UPDATED' },
     });
 
-    console.log(`[Webhook] Sincronização concluída para "${bankConnection.bankName}"`);
+    console.log(`[Webhook] Sincronização concluída para "${bankConnection.bankName}" — ${txCount} nova(s) transação(ões)`);
   } catch (error) {
     console.error('[Webhook] Erro ao processar:', error);
   }
