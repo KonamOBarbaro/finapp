@@ -55,7 +55,20 @@ app.post('/api/auth/register', async (req, res) => {
       }
     });
 
-    res.status(201).json({ message: 'Usuário e Workspace criados com sucesso!' });
+    // Cria a Carteira Física Padrão
+    await prisma.bankAccount.create({
+      data: {
+        workspaceId: user.workspaceId,
+        accountId: `wallet_${user.id}`,
+        name: 'Carteira Física (Dinheiro)',
+        type: 'WALLET',
+        balance: 0,
+        isShared: true,
+        ownerId: user.id
+      }
+    });
+
+    res.status(201).json({ message: 'Usuário, Workspace e Carteira criados com sucesso!' });
   } catch (error) {
     console.error('Registration Error:', error);
     res.status(500).json({ error: 'Erro ao registrar usuário' });
@@ -110,14 +123,44 @@ async function processSplitForTransaction(transactionId: string, workspaceId: st
     include: { users: true }
   });
 
-  if (!workspace) throw new Error('Workspace não encontrado');
+  if (!workspace || workspace.users.length === 0) return [];
+
+  const mode = workspace.splitRuleMode || 'PROPORTIONAL';
+  if (mode === 'POOL') return []; // Não gera dívidas no modo Caixa Único
+
+  // Para Rateio, buscamos também a conta para saber se é compartilhada!
+  const transaction = await prisma.transaction.findUnique({
+    where: { id: transactionId },
+    include: { bankAccount: true }
+  });
+
+  if (!transaction || !transaction.bankAccount?.isShared) {
+    return []; // Se a conta for privada (isShared = false), a despesa não é rateada com a casa
+  }
 
   const totalIncome = workspace.users.reduce((acc, user) => acc + (user.income || 0), 0);
-  if (totalIncome <= 0) return []; // Se não tem renda, não faz rateio proporcional
+  let totalCustomPercent = workspace.users.reduce((acc, user) => acc + (user.customSplitPercent || 0), 0);
+  
+  if (mode === 'CUSTOM' && totalCustomPercent === 0) {
+    totalCustomPercent = 100; // fallback para evitar divisão por zero se o admin não configurou
+  }
 
   return await Promise.all(
     workspace.users.map(async (user) => {
-      const userProportion = (user.income || 0) / totalIncome;
+      let userProportion = 0;
+
+      if (mode === 'EQUAL') {
+        userProportion = 1 / workspace.users.length;
+      } else if (mode === 'CUSTOM') {
+        userProportion = (user.customSplitPercent || 0) / totalCustomPercent;
+      } else { // PROPORTIONAL
+        if (totalIncome > 0) {
+          userProportion = (user.income || 0) / totalIncome;
+        } else {
+          userProportion = 1 / workspace.users.length; // fallback
+        }
+      }
+
       return prisma.splitPayment.create({
         data: {
           transactionId,
@@ -192,17 +235,37 @@ app.post('/api/transactions/process-split', authMiddleware, async (req: any, res
 
     if (!transaction) return res.status(404).json({ error: 'Transação não encontrada' });
 
-    // 3. Calcula a renda total da família para achar a proporção
-    const totalIncome = workspace.users.reduce((acc, user) => acc + (user.income || 0), 0);
-
-    if (totalIncome === 0) {
-      return res.status(400).json({ error: 'Os usuários precisam ter renda configurada para o rateio proporcional.' });
+    // 3. Verifica o modo de rateio
+    const mode = workspace.splitRuleMode || 'PROPORTIONAL';
+    
+    if (mode === 'POOL') {
+      return res.json({
+        message: 'Modo Caixa Único ativo. Dívidas individuais não geradas.',
+        transaction: transaction.amount,
+        splitMode: mode,
+        splits: []
+      });
     }
 
-    // 4. Cria os SplitPayments (Rateios) baseados na proporção da renda
+    const totalIncome = workspace.users.reduce((acc, user) => acc + (user.income || 0), 0);
+    let totalCustomPercent = workspace.users.reduce((acc, user) => acc + (user.customSplitPercent || 0), 0);
+    
+    if (mode === 'CUSTOM' && totalCustomPercent === 0) totalCustomPercent = 100;
+
+    // 4. Cria os SplitPayments
     const splits = await Promise.all(
       workspace.users.map(async (user) => {
-        const userProportion = (user.income || 0) / totalIncome;
+        let userProportion = 0;
+
+        if (mode === 'EQUAL') {
+          userProportion = 1 / workspace.users.length;
+        } else if (mode === 'CUSTOM') {
+          userProportion = (user.customSplitPercent || 0) / totalCustomPercent;
+        } else { // PROPORTIONAL
+          if (totalIncome > 0) userProportion = (user.income || 0) / totalIncome;
+          else userProportion = 1 / workspace.users.length; // fallback
+        }
+
         const amountOwed = transaction.amount * userProportion;
 
         return prisma.splitPayment.create({
@@ -219,10 +282,7 @@ app.post('/api/transactions/process-split', authMiddleware, async (req: any, res
     res.json({
       message: 'Rateio gerado com sucesso!',
       transaction: transaction.amount,
-      splitRules: workspace.users.map(u => ({
-        user: u.email,
-        percentage: ((u.income / totalIncome) * 100).toFixed(2) + '%'
-      })),
+      splitMode: mode,
       splits
     });
 
@@ -242,19 +302,30 @@ app.get('/api/family', authMiddleware, async (req: any, res: any) => {
       where: { id: workspaceId },
       include: {
         users: {
-          select: { id: true, name: true, email: true, income: true, createdAt: true }
+          select: { id: true, name: true, email: true, income: true, customSplitPercent: true, createdAt: true }
         }
       }
     });
     if (!workspace) return res.status(404).json({ error: 'Workspace não encontrado' });
     
     const totalIncome = workspace.users.reduce((acc, u) => acc + (u.income || 0), 0);
-    const members = workspace.users.map(u => ({
-      ...u,
-      proportion: totalIncome > 0 ? ((u.income || 0) / totalIncome) * 100 : 0
-    }));
+    const mode = workspace.splitRuleMode || 'PROPORTIONAL';
+    let totalCustomPercent = workspace.users.reduce((acc, u) => acc + (u.customSplitPercent || 0), 0);
+    if (totalCustomPercent === 0) totalCustomPercent = 100;
 
-    res.json({ workspaceId: workspace.id, name: workspace.name, totalIncome, members });
+    const members = workspace.users.map(u => {
+      let proportion = 0;
+      if (mode === 'EQUAL') proportion = (1 / workspace.users.length) * 100;
+      else if (mode === 'CUSTOM') proportion = ((u.customSplitPercent || 0) / totalCustomPercent) * 100;
+      else proportion = totalIncome > 0 ? ((u.income || 0) / totalIncome) * 100 : (1 / workspace.users.length) * 100;
+
+      return {
+        ...u,
+        proportion
+      };
+    });
+
+    res.json({ workspaceId: workspace.id, name: workspace.name, totalIncome, splitRuleMode: mode, members });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao buscar família' });
   }
@@ -280,31 +351,157 @@ app.post('/api/family/add', authMiddleware, async (req: any, res: any) => {
       }
     });
 
+    // Cria a Carteira Física Padrão para o novo membro
+    await prisma.bankAccount.create({
+      data: {
+        workspaceId,
+        accountId: `wallet_${newUser.id}`,
+        name: 'Carteira Física (Dinheiro)',
+        type: 'WALLET',
+        balance: 0,
+        isShared: true,
+        ownerId: newUser.id
+      }
+    });
+
     res.status(201).json({ message: 'Membro adicionado com sucesso', user: { id: newUser.id, name: newUser.name } });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao adicionar membro' });
   }
 });
 
-app.put('/api/family/income', authMiddleware, async (req: any, res: any) => {
-  const { userId, income } = req.body;
+app.put('/api/family/member', authMiddleware, async (req: any, res: any) => {
+  const { userId, income, customSplitPercent } = req.body;
   const workspaceId = req.user.workspaceId;
 
   try {
-    // Check if user belongs to the same workspace
     const userToUpdate = await prisma.user.findUnique({ where: { id: userId } });
     if (!userToUpdate || userToUpdate.workspaceId !== workspaceId) {
       return res.status(403).json({ error: 'Usuário não pertence a esta família' });
     }
 
+    const dataToUpdate: any = {};
+    if (income !== undefined) dataToUpdate.income = income;
+    if (customSplitPercent !== undefined) dataToUpdate.customSplitPercent = customSplitPercent;
+
     await prisma.user.update({
       where: { id: userId },
-      data: { income }
+      data: dataToUpdate
     });
 
-    res.json({ message: 'Renda atualizada com sucesso' });
+    res.json({ message: 'Membro atualizado com sucesso' });
   } catch (error) {
-    res.status(500).json({ error: 'Erro ao atualizar renda' });
+    res.status(500).json({ error: 'Erro ao atualizar membro' });
+  }
+});
+
+app.put('/api/family/mode', authMiddleware, async (req: any, res: any) => {
+  const { mode } = req.body;
+  const workspaceId = req.user.workspaceId;
+
+  if (!['PROPORTIONAL', 'EQUAL', 'CUSTOM', 'POOL'].includes(mode)) {
+    return res.status(400).json({ error: 'Modo inválido' });
+  }
+
+  try {
+    await prisma.workspace.update({
+      where: { id: workspaceId },
+      data: { splitRuleMode: mode }
+    });
+
+    res.json({ message: 'Modo de rateio atualizado com sucesso' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao atualizar modo de rateio' });
+  }
+});
+
+app.post('/api/accounts/manual', authMiddleware, async (req: any, res: any) => {
+  const { name, balance, isShared } = req.body;
+  const workspaceId = req.user.workspaceId;
+  const userId = req.user.userId;
+
+  try {
+    const account = await prisma.bankAccount.create({
+      data: {
+        workspaceId,
+        accountId: `manual_${Date.now()}_${userId}`,
+        name,
+        type: 'WALLET',
+        balance: parseFloat(balance) || 0,
+        isShared: isShared !== undefined ? isShared : true,
+        ownerId: userId
+      }
+    });
+    res.status(201).json(account);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao criar conta manual' });
+  }
+});
+
+app.post('/api/transactions/manual', authMiddleware, async (req: any, res: any) => {
+  const { bankAccountId, amount, description, type, category, date } = req.body;
+  const workspaceId = req.user.workspaceId;
+
+  try {
+    const account = await prisma.bankAccount.findUnique({ where: { id: bankAccountId } });
+    if (!account || account.workspaceId !== workspaceId) {
+      return res.status(403).json({ error: 'Conta não pertence ao seu workspace' });
+    }
+
+    const saved = await prisma.transaction.create({
+      data: {
+        bankAccountId,
+        amount: type === 'OUTFLOW' ? -Math.abs(amount) : Math.abs(amount),
+        description,
+        date: date ? new Date(date) : new Date(),
+        category,
+        type,
+        isShared: account.isShared
+      }
+    });
+
+    // Atualiza saldo da conta manual
+    await prisma.bankAccount.update({
+      where: { id: bankAccountId },
+      data: { balance: { increment: saved.amount } }
+    });
+
+    if (type === 'OUTFLOW' && account.isShared) {
+      await processSplitForTransaction(saved.id, workspaceId, saved.amount);
+    }
+
+    res.status(201).json(saved);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao lançar transação' });
+  }
+});
+
+app.put('/api/accounts/:id/share', authMiddleware, async (req: any, res: any) => {
+  const { id } = req.params;
+  const { isShared } = req.body;
+  const workspaceId = req.user.workspaceId;
+
+  try {
+    const account = await prisma.bankAccount.findUnique({ where: { id } });
+    if (!account || (account.workspaceId !== workspaceId && account.bankConnection?.workspaceId !== workspaceId)) {
+      // Need to include bankConnection to check workspace if it's an Open Finance account
+      const accountWithConn = await prisma.bankAccount.findUnique({
+        where: { id },
+        include: { bankConnection: true }
+      });
+      if (!accountWithConn || (accountWithConn.workspaceId !== workspaceId && accountWithConn.bankConnection?.workspaceId !== workspaceId)) {
+        return res.status(403).json({ error: 'Conta não pertence ao seu workspace' });
+      }
+    }
+
+    await prisma.bankAccount.update({
+      where: { id },
+      data: { isShared }
+    });
+
+    res.json({ message: 'Status de compartilhamento atualizado' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao atualizar conta' });
   }
 });
 
@@ -320,6 +517,13 @@ app.get('/api/dashboard', authMiddleware, async (req: any, res: any) => {
       where: { id: workspaceId },
       include: { 
         users: true,
+        bankAccounts: {
+          include: {
+            transactions: {
+              include: { splits: { include: { user: true } } }
+            }
+          }
+        },
         bankConnections: {
           include: {
             accounts: {
@@ -350,7 +554,9 @@ app.get('/api/dashboard', authMiddleware, async (req: any, res: any) => {
           bank: connection.bankName,
           balance: account.balance,
           isCredit: account.type === 'CREDIT_CARD',
-          limit: account.creditLimit
+          limit: account.creditLimit,
+          isShared: account.isShared,
+          ownerId: account.ownerId
         });
 
         account.transactions.forEach(tx => {
@@ -369,6 +575,38 @@ app.get('/api/dashboard', authMiddleware, async (req: any, res: any) => {
             }
           }
         });
+      });
+    });
+
+    // Add manual accounts
+    workspace.bankAccounts.forEach(account => {
+      totalBalance += account.balance;
+      accounts.push({
+        id: account.id,
+        name: account.name,
+        bank: 'Carteira/Manual',
+        balance: account.balance,
+        isCredit: account.type === 'CREDIT_CARD',
+        limit: account.creditLimit,
+        isShared: account.isShared,
+        ownerId: account.ownerId
+      });
+
+      account.transactions.forEach(tx => {
+        if (tx.type === 'OUTFLOW') {
+          totalExpenses += Math.abs(tx.amount);
+          if (tx.isShared) {
+            sharedTransactions.push({
+              id: tx.id,
+              description: tx.description,
+              amount: Math.abs(tx.amount),
+              shares: tx.splits.map(split => ({
+                name: split.user.name,
+                amount: split.amountOwed
+              }))
+            });
+          }
+        }
       });
     });
 

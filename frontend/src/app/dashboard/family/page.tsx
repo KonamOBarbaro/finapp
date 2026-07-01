@@ -1,9 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
+
+interface FamilyMember {
+  id: string;
+  name: string;
+  email: string;
+  income: number;
+  proportion: number;
+  customSplitPercent?: number;
+}
+
+interface FamilyData {
+  totalIncome: number;
+  splitRuleMode: "PROPORTIONAL" | "EQUAL" | "CUSTOM" | "POOL";
+  members: FamilyMember[];
+}
 
 export default function FamilyPage() {
-  const [family, setFamily] = useState<any>(null);
+  const [family, setFamily] = useState<FamilyData | null>(null);
   const [loading, setLoading] = useState(true);
   
   // New member form
@@ -15,8 +30,11 @@ export default function FamilyPage() {
   
   const [editIncomeUser, setEditIncomeUser] = useState<string | null>(null);
   const [editIncomeValue, setEditIncomeValue] = useState("");
+  
+  const [editCustomUser, setEditCustomUser] = useState<string | null>(null);
+  const [editCustomValue, setEditCustomValue] = useState("");
 
-  const fetchFamily = async () => {
+  const fetchFamily = useCallback(async () => {
     try {
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/family`, {
         headers: {
@@ -32,11 +50,12 @@ export default function FamilyPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchFamily();
-  }, []);
+  }, [fetchFamily]);
 
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,7 +85,7 @@ export default function FamilyPage() {
         const error = await res.json();
         alert(error.error || "Erro ao adicionar membro");
       }
-    } catch (err) {
+    } catch {
       alert("Erro ao adicionar membro");
     }
   };
@@ -89,8 +108,47 @@ export default function FamilyPage() {
         setEditIncomeUser(null);
         fetchFamily();
       }
-    } catch (err) {
+    } catch {
       alert("Erro ao atualizar renda");
+    }
+  };
+
+  const handleUpdateCustomSplit = async (userId: string) => {
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/family/member`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+        body: JSON.stringify({
+          userId,
+          customSplitPercent: parseFloat(editCustomValue || "0")
+        })
+      });
+      
+      if (res.ok) {
+        setEditCustomUser(null);
+        fetchFamily();
+      }
+    } catch {
+      alert("Erro ao atualizar porcentagem");
+    }
+  };
+
+  const handleChangeMode = async (mode: string) => {
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/family/mode`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+        body: JSON.stringify({ mode })
+      });
+      if (res.ok) fetchFamily();
+    } catch {
+      alert("Erro ao trocar modo");
     }
   };
 
@@ -189,6 +247,40 @@ export default function FamilyPage() {
         </div>
       )}
 
+      {/* Selector do Modo de Rateio */}
+      <div className="bg-slate-800/50 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6">
+        <h2 className="text-lg font-semibold text-white mb-2">Regra de Divisão de Contas</h2>
+        <p className="text-sm text-slate-400 mb-4">Escolha como as compras conjuntas da família serão divididas automaticamente no sistema.</p>
+        <div className="flex flex-col sm:flex-row gap-3">
+          <button onClick={() => handleChangeMode('PROPORTIONAL')} className={`flex-1 p-3 rounded-xl border text-sm font-medium transition-all ${family?.splitRuleMode === 'PROPORTIONAL' ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400' : 'bg-slate-900/50 border-slate-700 text-slate-400 hover:border-slate-500'}`}>
+            <div className="mb-1 font-bold">Proporcional à Renda</div>
+            <div className="text-xs font-normal opacity-70">Quem ganha mais, paga mais</div>
+          </button>
+          <button onClick={() => handleChangeMode('EQUAL')} className={`flex-1 p-3 rounded-xl border text-sm font-medium transition-all ${family?.splitRuleMode === 'EQUAL' ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400' : 'bg-slate-900/50 border-slate-700 text-slate-400 hover:border-slate-500'}`}>
+            <div className="mb-1 font-bold">Meio a Meio</div>
+            <div className="text-xs font-normal opacity-70">Despesas divididas igualmente</div>
+          </button>
+          <button onClick={() => handleChangeMode('CUSTOM')} className={`flex-1 p-3 rounded-xl border text-sm font-medium transition-all ${family?.splitRuleMode === 'CUSTOM' ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400' : 'bg-slate-900/50 border-slate-700 text-slate-400 hover:border-slate-500'}`}>
+            <div className="mb-1 font-bold">Personalizado</div>
+            <div className="text-xs font-normal opacity-70">Você define a % exata</div>
+          </button>
+          <button onClick={() => handleChangeMode('POOL')} className={`flex-1 p-3 rounded-xl border text-sm font-medium transition-all ${family?.splitRuleMode === 'POOL' ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400' : 'bg-slate-900/50 border-slate-700 text-slate-400 hover:border-slate-500'}`}>
+            <div className="mb-1 font-bold">Caixa Único</div>
+            <div className="text-xs font-normal opacity-70">Tudo é da família (Sem dívidas)</div>
+          </button>
+        </div>
+        
+        {family?.splitRuleMode === 'POOL' && (
+          <div className="mt-4 p-4 bg-cyan-500/10 border border-cyan-500/20 rounded-xl flex items-start gap-3">
+            <svg className="w-5 h-5 text-cyan-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            <p className="text-sm text-cyan-100/90 leading-relaxed">
+              <strong>Modo Caixa Único ativado!</strong> O sistema não irá calcular quem deve para quem. 
+              Todas as receitas e despesas de todas as contas conectadas serão tratadas como pertencentes a um único "bolo" familiar.
+            </p>
+          </div>
+        )}
+      </div>
+
       {/* Renda Total Card */}
       <div className="bg-gradient-to-br from-emerald-500/10 to-teal-500/10 border border-emerald-500/20 rounded-2xl p-6">
         <div className="flex items-center gap-4">
@@ -206,7 +298,7 @@ export default function FamilyPage() {
 
       {/* Members List */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {family?.members?.map((member: any) => (
+        {family?.members?.map((member: FamilyMember) => (
           <div key={member.id} className="bg-slate-800/50 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6 relative overflow-hidden group">
             <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/5 rounded-full blur-3xl -mr-10 -mt-10 transition-all group-hover:bg-cyan-500/10"></div>
             
@@ -221,12 +313,20 @@ export default function FamilyPage() {
                 </div>
               </div>
               <div className="text-right">
-                <div className="text-2xl font-bold text-cyan-400">{member.proportion.toFixed(1)}%</div>
-                <p className="text-xs text-slate-500">Participação</p>
+                {family?.splitRuleMode === 'POOL' ? (
+                  <>
+                    <div className="text-lg font-bold text-cyan-400">Caixa Único</div>
+                    <p className="text-xs text-slate-500">Sem divisão</p>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-2xl font-bold text-cyan-400">{member.proportion.toFixed(1)}%</div>
+                    <p className="text-xs text-slate-500">Participação</p>
+                  </>
+                )}
               </div>
             </div>
 
-            <div className="space-y-4">
               <div className="flex items-center justify-between p-3 bg-slate-900/50 rounded-xl border border-slate-800">
                 <div className="flex items-center gap-2">
                   <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path></svg>
@@ -258,21 +358,58 @@ export default function FamilyPage() {
                   </div>
                 )}
               </div>
+
+              {family?.splitRuleMode === 'CUSTOM' && (
+                <div className="flex items-center justify-between p-3 bg-slate-900/50 rounded-xl border border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z"></path></svg>
+                    <span className="text-sm text-slate-300">Porcentagem Customizada</span>
+                  </div>
+                  {editCustomUser === member.id ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        autoFocus
+                        className="w-20 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-cyan-500"
+                        value={editCustomValue}
+                        onChange={(e) => setEditCustomValue(e.target.value)}
+                      />
+                      <span className="text-white text-sm">%</span>
+                      <button onClick={() => handleUpdateCustomSplit(member.id)} className="text-xs bg-cyan-500 text-white px-2 py-1 rounded">OK</button>
+                      <button onClick={() => setEditCustomUser(null)} className="text-xs text-slate-400 px-1">X</button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-3">
+                      <span className="font-medium text-white">
+                        {member.customSplitPercent || 0}%
+                      </span>
+                      <button onClick={() => {
+                        setEditCustomUser(member.id);
+                        setEditCustomValue((member.customSplitPercent || 0).toString());
+                      }} className="text-xs text-cyan-500 hover:text-cyan-400">
+                        Editar
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             
             {/* Proportion Bar */}
-            <div className="mt-6 pt-4 border-t border-slate-700/50">
-              <div className="flex justify-between text-xs text-slate-400 mb-2">
-                <span>Peso nas despesas divididas</span>
-                <span>{member.proportion.toFixed(1)}%</span>
+            {family?.splitRuleMode !== 'POOL' && (
+              <div className="mt-6 pt-4 border-t border-slate-700/50">
+                <div className="flex justify-between text-xs text-slate-400 mb-2">
+                  <span>Peso nas despesas divididas</span>
+                  <span>{member.proportion.toFixed(1)}%</span>
+                </div>
+                <div className="w-full bg-slate-900 rounded-full h-2 overflow-hidden">
+                  <div 
+                    className="bg-gradient-to-r from-cyan-500 to-blue-500 h-full rounded-full transition-all duration-1000"
+                    style={{ width: `${member.proportion}%` }}
+                  ></div>
+                </div>
               </div>
-              <div className="w-full bg-slate-900 rounded-full h-2 overflow-hidden">
-                <div 
-                  className="bg-gradient-to-r from-cyan-500 to-blue-500 h-full rounded-full transition-all duration-1000"
-                  style={{ width: `${member.proportion}%` }}
-                ></div>
-              </div>
-            </div>
+            )}
           </div>
         ))}
       </div>

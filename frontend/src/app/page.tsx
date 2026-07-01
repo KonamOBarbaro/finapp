@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 
 export default function Home() {
   const [email, setEmail] = useState('');
@@ -47,8 +48,9 @@ export default function Home() {
         // Redirect to dashboard
         router.push('/dashboard');
       }
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: Error | unknown) {
+      if (err instanceof Error) setError(err.message);
+      else setError('Erro desconhecido');
     } finally {
       setLoading(false);
     }
@@ -66,7 +68,7 @@ export default function Home() {
         <div className="relative z-20 w-full h-full flex flex-col justify-between p-16">
           <div className="flex items-center space-x-4">
             <div className="w-16 h-16 bg-white rounded-xl flex items-center justify-center shadow-2xl shadow-black/50 p-2 overflow-hidden">
-              <img src="/logo.png" alt="AJ Solutions Logo" className="w-full h-full object-contain" />
+              <Image src="/logo.png" alt="AJ Solutions Logo" width={64} height={64} className="w-full h-full object-contain" />
             </div>
             <span className="text-white text-2xl font-bold tracking-tight">AJ Solutions</span>
           </div>
@@ -97,7 +99,7 @@ export default function Home() {
           
           <div className="lg:hidden flex items-center justify-center space-x-3 mb-12">
             <div className="w-12 h-12 bg-white rounded-lg flex items-center justify-center shadow-lg p-1 overflow-hidden">
-              <img src="/logo.png" alt="AJ Solutions" className="w-full h-full object-contain" />
+              <Image src="/logo.png" alt="AJ Solutions" width={48} height={48} className="w-full h-full object-contain" />
             </div>
             <span className="text-foreground text-2xl font-bold tracking-tight">AJ Solutions</span>
           </div>

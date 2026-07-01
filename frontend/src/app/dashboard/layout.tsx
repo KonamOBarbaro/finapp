@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 
 export default function DashboardLayout({
   children,
@@ -14,7 +15,7 @@ export default function DashboardLayout({
         <div className="h-20 flex items-center px-8 border-b border-surface-border">
           <div className="flex items-center space-x-3">
             <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-md border border-secondary/30 p-1 overflow-hidden">
-              <img src="/logo.png" alt="AJ Solutions" className="w-full h-full object-contain" />
+              <Image src="/logo.png" alt="AJ Solutions" width={48} height={48} className="w-full h-full object-contain" />
             </div>
             <span className="font-bold text-xl text-foreground tracking-tight">FinApp</span>
           </div>

@@ -40,29 +40,29 @@ export default function TransactionsPage() {
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
 
-  const fetchTransactions = async (p: number, f: string, s: string) => {
-    setLoading(true);
-    try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3333";
-      const params = new URLSearchParams({ page: String(p), limit: "20", type: f });
-      if (s) params.set("search", s);
-      const res = await fetch(`${apiUrl}/api/transactions?${params}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setTransactions(data.transactions);
-        setTotal(data.total);
-        setTotalPages(data.totalPages);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
+    const fetchTransactions = async (p: number, f: string, s: string) => {
+      setLoading(true);
+      try {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3333";
+        const params = new URLSearchParams({ page: String(p), limit: "20", type: f });
+        if (s) params.set("search", s);
+        const res = await fetch(`${apiUrl}/api/transactions?${params}`, {
+          headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setTransactions(data.transactions);
+          setTotal(data.total);
+          setTotalPages(data.totalPages);
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
     fetchTransactions(page, filter, search);
   }, [page, filter, search]);
 

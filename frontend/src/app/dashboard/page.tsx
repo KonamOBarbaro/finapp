@@ -9,22 +9,77 @@ const PluggyConnect = dynamic(
   { ssr: false }
 );
 
+interface DashboardData {
+  finances: {
+    totalBalance: number;
+    leftover: number;
+    totalExpenses: number;
+  };
+  accounts: {
+    id: string;
+    isCredit: boolean;
+    bank: string;
+    name: string;
+    balance: number;
+    isShared: boolean;
+  }[];
+  recentTransactions: {
+    id: string;
+    description: string;
+    amount: number;
+    type: 'INFLOW' | 'OUTFLOW';
+    date: string;
+    category?: string;
+  }[];
+  users: { id: string; name: string; percentage: number }[];
+  splits: { 
+    id: string; 
+    description: string; 
+    totalAmount: number;
+    shares: { 
+      user: { name: string }; 
+      amount: number; 
+      status: string 
+    }[] 
+  }[];
+}
+
 export default function Dashboard() {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [pluggyToken, setPluggyToken] = useState<string | null>(null);
   const router = useRouter();
 
   const [syncStatus, setSyncStatus] = useState<'idle' | 'loading' | 'error'>('idle');
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [formDesc, setFormDesc] = useState('');
-  const [formAmount, setFormAmount] = useState('');
-  const [formType, setFormType] = useState('OUTFLOW');
-  const [formAccountId, setFormAccountId] = useState('');
-  const [formIsShared, setFormIsShared] = useState(true);
-  const [formUserId, setFormUserId] = useState('');
-  const [formIsInstallment, setFormIsInstallment] = useState(false);
-  const [formInstallments, setFormInstallments] = useState('2');
+
+  // Modal State
+  const [showModal, setShowModal] = useState(false);
+  const [txAmount, setTxAmount] = useState('');
+  const [txDescription, setTxDescription] = useState('');
+  const [txType, setTxType] = useState<'OUTFLOW' | 'INFLOW'>('OUTFLOW');
+  const [txAccountId, setTxAccountId] = useState('');
+
+  const fetchDashboard = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      router.push('/');
+      return;
+    }
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3333';
+      const res = await fetch(`${apiUrl}/api/dashboard`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Token inválido');
+      const json = await res.json();
+      setData(json);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleConnectPluggy = async () => {
     setSyncStatus('loading');
@@ -80,56 +135,58 @@ export default function Dashboard() {
     fetchDashboard();
   }, [router]);
 
-  const handleSubmitTransaction = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleToggleShare = async (accountId: string, currentShared: boolean) => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3333';
-      const url = formIsInstallment 
-        ? `${apiUrl}/api/transactions/installments` 
-        : `${apiUrl}/api/transactions`;
-      
-      const body = formIsInstallment ? {
-        bankAccountId: formAccountId || data?.accounts[0]?.id,
-        description: formDesc,
-        totalAmount: Number(formAmount),
-        totalInstallments: Number(formInstallments),
-        isShared: formIsShared,
-        userId: formIsShared ? undefined : formUserId || data?.users[0]?.id
-      } : {
-        bankAccountId: formAccountId || data?.accounts[0]?.id,
-        description: formDesc,
-        amount: Number(formAmount),
-        type: formType,
-        isShared: formIsShared,
-        userId: formIsShared ? undefined : formUserId || data?.users[0]?.id
-      };
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3333'}/api/accounts/${accountId}/share`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({ isShared: !currentShared })
+      });
+      if (res.ok) {
+        fetchDashboard();
+      }
+    } catch (err) {
+      console.error("Erro ao alterar visibilidade", err);
+    }
+  };
 
-      const res = await fetch(url, {
+  const handleAddManualTransaction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!txAccountId) return alert("Selecione uma conta");
+    
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3333'}/api/transactions/manual`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('token')}`
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify({
+          bankAccountId: txAccountId,
+          amount: parseFloat(txAmount),
+          description: txDescription,
+          type: txType,
+          date: new Date().toISOString()
+        })
       });
-      
+
       if (res.ok) {
-        setIsModalOpen(false);
-        setFormDesc('');
-        setFormAmount('');
-        // Refetch
-        const token = localStorage.getItem('token');
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3333';
-        const dashRes = await fetch(`${apiUrl}/api/dashboard`, { headers: { 'Authorization': `Bearer ${token}` } });
-        setData(await dashRes.json());
+        setShowModal(false);
+        setTxAmount('');
+        setTxDescription('');
+        fetchDashboard();
       } else {
-        const error = await res.json();
-        alert('Erro ao salvar: ' + error.error);
+        alert("Erro ao lançar transação");
       }
     } catch (err) {
-      console.error(err);
+      alert("Erro de conexão");
     }
   };
+
+
 
   if (loading) {
     return (
@@ -151,7 +208,7 @@ export default function Dashboard() {
         </div>
         
         <div className="flex space-x-3">
-          <button onClick={() => setIsModalOpen(true)} className="px-5 py-2.5 rounded-xl bg-surface border border-surface-border text-foreground font-semibold shadow-sm hover:shadow-md transition-all flex items-center space-x-2">
+          <button onClick={() => setShowModal(true)} className="px-5 py-2.5 rounded-xl bg-surface border border-surface-border text-foreground font-semibold shadow-sm hover:shadow-md transition-all flex items-center space-x-2">
             <svg className="w-5 h-5 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
             <span>Nova Transação</span>
           </button>
@@ -252,7 +309,7 @@ export default function Dashboard() {
           </div>
           
           <div className="space-y-4">
-            {data?.accounts?.length > 0 ? data.accounts.map((acc: any, idx: number) => (
+            {data?.accounts && data.accounts.length > 0 ? data.accounts.map((acc, idx: number) => (
               <div key={idx} className="group flex items-center justify-between p-5 bg-surface rounded-2xl border border-surface-border hover:border-accent/50 hover:shadow-lg hover:shadow-accent/5 transition-all cursor-pointer">
                 <div className="flex items-center space-x-5">
                   <div className={`w-14 h-14 rounded-xl flex items-center justify-center text-white font-black text-xl shadow-md ${acc.isCredit ? 'bg-gradient-to-br from-gray-800 to-black' : 'bg-gradient-to-br from-[#8A05BE] to-[#5a037c]'}`}>
@@ -266,11 +323,23 @@ export default function Dashboard() {
                     </div>
                   </div>
                 </div>
-                <div className="text-right">
+                </div>
+                <div className="text-right flex flex-col items-end gap-2">
                   <p className={`font-bold text-xl ${acc.balance < 0 ? 'text-red-500' : 'text-foreground'}`}>
                     {acc.balance < 0 ? '- ' : ''}R$ {Math.abs(acc.balance).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                   </p>
-                  <p className="text-sm text-secondary font-medium mt-1">{acc.bank || 'Banco'}</p>
+                  
+                  {/* Share Toggle */}
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); handleToggleShare(acc.id, acc.isShared); }}
+                    className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs font-semibold transition-colors border ${acc.isShared ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20' : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'}`}
+                  >
+                    {acc.isShared ? (
+                      <><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg> Compartilhada</>
+                    ) : (
+                      <><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg> Privada</>
+                    )}
+                  </button>
                 </div>
               </div>
             )) : (
@@ -341,7 +410,7 @@ export default function Dashboard() {
           <div>
             <h2 className="text-xl font-bold text-foreground">Gestão de Rateio & Parcelamentos</h2>
             <p className="text-sm text-secondary font-medium mt-1">
-              Divisão inteligente de despesas: {data?.users?.map((u: any) => `${Math.round(u.percentage)}% ${u.name.split(' ')[0]}`).join(' / ')}
+              Divisão inteligente de despesas: {data?.users?.map((u) => `${Math.round(u.percentage)}% ${u.name.split(' ')[0]}`).join(' / ')}
             </p>
           </div>
           <button className="px-4 py-2 bg-accent/10 text-accent font-semibold rounded-xl hover:bg-accent hover:text-white transition-colors">
@@ -351,7 +420,7 @@ export default function Dashboard() {
         
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Rateio Items */}
-          {data?.splits?.map((split: any, idx: number) => (
+          {data?.splits?.map((split, idx: number) => (
             <div key={idx} className="p-5 bg-surface border border-surface-border rounded-2xl hover:border-accent/30 transition-colors">
               <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center space-x-3">
@@ -367,7 +436,7 @@ export default function Dashboard() {
               </div>
               <div className="flex justify-between items-center bg-background rounded-xl p-3 border border-surface-border text-sm">
                 
-                {split.shares?.map((share: any, sIdx: number) => (
+                {split.shares?.map((share, sIdx: number) => (
                   <div key={sIdx} className="flex items-center space-x-2">
                     {sIdx === 0 && <div className="w-6 h-6 rounded-full bg-accent text-white flex items-center justify-center text-xs font-bold">{share.name.charAt(0)}</div>}
                     <span className="text-secondary">{share.name.split(' ')[0]} <strong className="text-foreground">R$ {share.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong></span>
@@ -436,7 +505,7 @@ export default function Dashboard() {
             setPluggyToken(null);
           }
         }}
-        onError={(error: any) => {
+        onError={(error: Error) => {
           console.error('Erro no widget da Pluggy:', error);
           setPluggyToken(null);
         }}

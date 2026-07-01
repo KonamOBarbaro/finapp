@@ -13,8 +13,10 @@ model User {
   name        String?
   password    String
   income      Float      @default(0) // Used to calculate proportional split
+  customSplitPercent Float? // Used when splitRuleMode is CUSTOM
   workspaceId String?
   workspace   Workspace? @relation(fields: [workspaceId], references: [id])
+  ownedAccounts BankAccount[] @relation("UserOwnedAccounts")
   splitsPaid  SplitPayment[] @relation("UserSplits")
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
@@ -26,6 +28,12 @@ model Workspace {
   name            String
   users           User[]
   bankConnections BankConnection[]
+  goals           Goal[]
+  budgets         CategoryBudget[]
+  investments     Investment[]
+  recurring       RecurringExpense[]
+  bankAccounts    BankAccount[]
+  
   splitRuleMode   String           @default("PROPORTIONAL") // "PROPORTIONAL", "EQUAL", "CUSTOM"
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
@@ -46,13 +54,19 @@ model BankConnection {
 
 model BankAccount {
   id               String         @id @default(uuid())
-  bankConnectionId String
-  bankConnection   BankConnection @relation(fields: [bankConnectionId], references: [id])
+  workspaceId      String?
+  workspace        Workspace?     @relation(fields: [workspaceId], references: [id])
+  bankConnectionId String?
+  bankConnection   BankConnection? @relation(fields: [bankConnectionId], references: [id])
   accountId        String         @unique
   name             String
-  type             String         // "CHECKING", "CREDIT_CARD", etc
+  type             String         // "CHECKING", "CREDIT_CARD", "WALLET", etc
   balance          Float
   currency         String         @default("BRL")
+  
+  isShared         Boolean        @default(true)
+  ownerId          String?
+  owner            User?          @relation("UserOwnedAccounts", fields: [ownerId], references: [id])
   
   // Credit Card specific fields
   creditLimit      Float?
@@ -110,6 +124,62 @@ model SplitPayment {
   user          User        @relation("UserSplits", fields: [userId], references: [id])
   amountOwed    Float
   status        String      @default("PENDING") // "PENDING", "PAID"
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}
+
+// ----------------------------------------------------
+// ECOSYSTEM: Advanced Financial Life Features
+// ----------------------------------------------------
+
+model Goal {
+  id            String      @id @default(uuid())
+  workspaceId   String
+  workspace     Workspace   @relation(fields: [workspaceId], references: [id])
+  name          String      // "Viagem pra Europa", "Carro novo"
+  targetAmount  Float
+  currentAmount Float       @default(0)
+  targetDate    DateTime?
+  status        String      @default("ACTIVE") // "ACTIVE", "COMPLETED"
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}
+
+model CategoryBudget {
+  id            String      @id @default(uuid())
+  workspaceId   String
+  workspace     Workspace   @relation(fields: [workspaceId], references: [id])
+  category      String
+  amountLimit   Float
+  period        String      @default("MONTHLY") // "MONTHLY", "YEARLY"
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@unique([workspaceId, category, period])
+}
+
+model Investment {
+  id            String      @id @default(uuid())
+  workspaceId   String
+  workspace     Workspace   @relation(fields: [workspaceId], references: [id])
+  name          String      // "CDB Liquidez Diária", "PETR4"
+  type          String      // "FIXED_INCOME", "STOCKS", "CRYPTO", "REAL_ESTATE"
+  currentValue  Float
+  investedAmount Float
+  currency      String      @default("BRL")
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}
+
+model RecurringExpense {
+  id            String      @id @default(uuid())
+  workspaceId   String
+  workspace     Workspace   @relation(fields: [workspaceId], references: [id])
+  name          String      // "Netflix", "Academia"
+  amount        Float
+  frequency     String      @default("MONTHLY") // "MONTHLY", "YEARLY"
+  nextDueDate   DateTime
+  isActive      Boolean     @default(true)
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 }

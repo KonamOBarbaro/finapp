@@ -15,3 +15,6 @@ Criar a plataforma definitiva de **Gestão Financeira Familiar Inteligente**, co
 * **Frontend Web:** Next.js, TailwindCSS (Design Premium Glassmorphism)
 * **Mobile:** React Native (Expo)
 * **Open Finance:** Pluggy/Belvo
+
+## 🧹 Débitos Técnicos Resolvidos
+- **[2026-07-01]** Refatoração do Frontend (Next.js): substituição de `<img>` por `<Image>` nativo do Next.js; correção do anti-pattern de setState dentro de useEffect; e tipagem rigorosa de componentes com remoção de `any`.
