@@ -16,5 +16,8 @@ Criar a plataforma definitiva de **Gestão Financeira Familiar Inteligente**, co
 * **Mobile:** React Native (Expo)
 * **Open Finance:** Pluggy/Belvo
 
-## 🧹 Débitos Técnicos Resolvidos
 - **[2026-07-01]** Refatoração do Frontend (Next.js): substituição de `<img>` por `<Image>` nativo do Next.js; correção do anti-pattern de setState dentro de useEffect; e tipagem rigorosa de componentes com remoção de `any`.
+
+## 🏗 Evolução Arquitetural
+- **[2026-07-01] Arquitetura Híbrida de Contas:** Para não deixar o sistema engessado, as contas agora podem ser offline (`type: WALLET`), permitindo o registro de transações manuais via um Modal.
+- **[2026-07-01] Privacidade & Caixa Único:** Contas passaram a ter a propriedade `isShared` para distinguir finanças conjuntas de contas privadas do casal. A engine de divisão ganhou 4 modos independentes (Proporcional, Igualitário, Simbólico e Caixa Único).

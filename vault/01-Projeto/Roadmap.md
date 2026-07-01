@@ -7,7 +7,7 @@ Este Roadmap direciona o desenvolvimento da plataforma para se tornar a **Centra
 - [x] Backend Setup e Banco de Dados com Prisma.
 - [x] Design Premium AJ Solutions (Glassmorphism, Next.js).
 - [x] Open Finance Core: Conexão com bancos via Pluggy (Conta corrente e Cartões).
-- [ ] **Rateio Inteligente:** Divisão de contas familiar com base no peso de cada membro.
+- [x] **Rateio Inteligente & Arquitetura Híbrida:** Divisão configurável (Proporcional, Igualitário, Custom, Caixa Único). Suporte a contas privadas e lançamentos manuais (Carteira Física).
 - [ ] Visão de Fechamento de Mês e Projeção de Sobras.
 
 ## Nível 2: Limites e Proteção (Intermediário)
