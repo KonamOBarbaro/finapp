@@ -482,16 +482,13 @@ app.put('/api/accounts/:id/share', authMiddleware, async (req: any, res: any) =>
   const workspaceId = req.user.workspaceId;
 
   try {
-    const account = await prisma.bankAccount.findUnique({ where: { id } });
-    if (!account || (account.workspaceId !== workspaceId && account.bankConnection?.workspaceId !== workspaceId)) {
-      // Need to include bankConnection to check workspace if it's an Open Finance account
-      const accountWithConn = await prisma.bankAccount.findUnique({
-        where: { id },
-        include: { bankConnection: true }
-      });
-      if (!accountWithConn || (accountWithConn.workspaceId !== workspaceId && accountWithConn.bankConnection?.workspaceId !== workspaceId)) {
-        return res.status(403).json({ error: 'Conta não pertence ao seu workspace' });
-      }
+    const accountWithConn = await prisma.bankAccount.findUnique({
+      where: { id },
+      include: { bankConnection: true }
+    });
+    
+    if (!accountWithConn || (accountWithConn.workspaceId !== workspaceId && accountWithConn.bankConnection?.workspaceId !== workspaceId)) {
+      return res.status(403).json({ error: 'Conta não pertence ao seu workspace' });
     }
 
     await prisma.bankAccount.update({
